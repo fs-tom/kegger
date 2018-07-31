@@ -10,4 +10,3 @@
                  [com.esotericsoftware/kryo-shaded "4.0.0"]  ;; For Spark 2.x support
                  [org.apache.spark/spark-core_2.11 "2.1.0"]
                  [org.apache.spark/spark-streaming_2.11 "2.1.0"]])
-                 
