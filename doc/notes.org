@@ -1,0 +1,57 @@
+* Running Under Windows + JRE
+** Setting up the master/slave on windows
+  is a bit involved
+  - Easiest way to do it is to avoid 
+    the startup scripts and just launch via powershell.
+    - ./spark-class org.apache.spark.deploy.master.Master [opts]
+    - ./spark-class org.apache.spark.deploy.worker.Worker spark://...
+  - I left these instances running in separate shells.
+  - There seems to be some minor permissions issues in the log
+    files regarding temporary file deletion, no idea.
+
+** My initial setup was running through lein, which causes problems on W10
+  - Filename too long error, 206 or something.
+    - Saying the classpath is too big due to some arbitrary limit.
+    - This is NOT a problem at all in linux.
+  - Work-around
+    - add [:eval-in :classloader] to project.clj
+    - Now you can get a REPL, but you can require 'powderkeg.core
+      - it'll complain about being unable to attach instrumentation
+        if you're running (unintentionally) a JRE.
+      - JDK should be no problem.
+
+** getting ourobourous to instrument a JRE (vs. a JDK) requires some additional dependencies
+  - tools.jar (from jdk/lib/)  
+  - attachment.dll (from jdk/jre/bin)
+  - Ensure these are on the classpath....
+  - Additionally, create a dir called /lib
+  - compute lein classpath > classes.txt
+  - run the script load-class.clj to copy all the classpath deps in /lib
+  - no idea why, but...
+    - +lein uberjar+
+    - +then from the /target folder, you should be able to eval+
+      +java -cp "tools.jar;kegger-0.1.0-SNAPSHOT-standalone.jar;../lib/*" clojure.main+
+      java -cp "tools.jar;./lib/*" clojure.main
+    - which should pickup everything (no idea why I needed to do uberjar, but
+      wouldn't work without an uber...
+  - This gets us a REPL, where we can successfully require powderkeg.core, 
+    and instrumentation will work, but...
+    - The dependency resolution used to compare the known jars (spark jars)
+      and non-spark, to build up the execution environment, needs to 
+      compare by filename, not uri (default).
+    - Added a monkey patch in patch.clj, which retroactively does this.
+    - So, eval patch.clj (via load-file or repl), then you should be able
+      to connect.
+    - basic tests work fine.
+      - seem a little slow at first (perhaps network hops to copy and deploy
+        jars, particularly if we've got duplicates due to uberjar + lib?
+    - AND NOW THEY DON't....
+      - getting array storage exceptions, suggested it might be related to 
+        kegger not having hadoop libs, specifically winutils.exe
+      - download and placed, no more error about hadoop, but storage
+        is still busted.
+      - no idea why it worked before, and not now.  Even started new 
+        master/worker pool.
+    
+
+ 
