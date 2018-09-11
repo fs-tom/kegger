@@ -1,0 +1,196 @@
+* Building Clusters
+We'll discuss some of the peculiarities that occur when we
+try to follow tutorials to build clusters, and connect to them
+with powderkeg.  Primarily, we'll examine the implicit
+port and connectivity constraints that appear to be 
+non-obvious when spinning up a cluster....yet things
+that powderkeg relies on to communicate from the
+repl to the cluster.
+
+* Primary Cluster Types
+** FlintRock (EC2)
+
+** Yarn (EMR)
+
+* FlintRock (linux/OSX only)
+** Basic Admin
+Security rules must allow ssh and generic traffic between machines,
+particularly with the machine spinning up the cluster (invoking flintrock).
+
+We have problem SSH'g into the cluster if we don't have permissive rules for
+some reason...
+
+** Running as a client
+The "client" mode for the spark cluster will interact with the master node
+(ala spark://....) by creating a "driver" upon which executors can be coralled 
+and resources (such as jar files) submitted.
+
+This is the default way I went into the flintrock / spark setup, not knowing
+any better.
+
+Another strategy is to establish a socket repl on the cluster, running
+the repl example via spark-submit.  This would establish a socket repl
+that's feasible to connect to.  This looks like the better route to go
+in the future.
+
+For now, experiments are relegated to looking at how to interact - 
+from a non-cluster computer both on / off the cluster's VPC - from a 
+live repl session, per the design of powderkeg.
+ 
+** Nagging Issues
+If we do this, without altering port settings, it looks like the spark context
+(the handle that powderkeg creates to a SparkContext object that represents the
+configuration and communications options for the cluster) will bomb out and
+die if we try to interact with it.  That is, we'll get wierd timeouts and
+nondescriptive errors that we have to trace back to figure out that
+communications are being blocked..
+
+Spark basically engages in a ton of activity across some broad (random) port ranges:
+ 
+- communicating results to and from the client
+- copying necessary resources like jars for the shared classpath
+- talking amongst the cluster (sharing intermediate data/results)
+
+So, we need to allow these communications to happen.
+
+*** AWS Strategy - Security Groups
+If we're running flintrock, it will default to creating a flintrock 
+security group for the cluster.  This opens the ports necessary for
+aforementioned communications in spark.
+
+However, we still end up with a problem - during setup - of spark
+appearing to fail to configure due to a bizarre and sudden inability
+to ssh into the node(s).
+  - This error is obscure, and largely due to supporting infrastructure
+    in flintrock shifting from public to private ip's and hostnames later
+    in the proces.
+    - ongoing issue.
+  - Workaround is to add specific rules that allow the client machine to
+    have access to necessary ports as well - or allow all communications
+    from the client, either directly by ip, or via another security group
+    setting.
+
+Once we open up the ports and allow comms to flow, flintrock works
+like it's supposed to, sets up the cluster, and allows us to discover
+and manage the cluster.
+
+*** Flintrock config
+Just some extra notes:
+
+- You can edit ~/.config/flintrock/config.yaml
+  I altered the defaults.
+
+- It's probably wise to go ahead and back your own AMI, since flintrock defaults to
+  downloading and installing spark and java every time you spin up a node.
+  You can specify to not do this.  So, a likely optimization strategy would
+  be pre-installing everything (jars even) and saving that as an AMI.
+
+- Pay attention to the region you're launching, make sure it matches your
+  desired region (default did not for me).
+
+- Prepare to have a dedicated public/private key for the cluster.
+  - I genereated my own cluster keypair, and relied on that.
+
+- You can define custom security group to use.  Default is flintrock.
+  - It's possible to edit this group and have shared defaults across everybody.
+  - Master and slaves will be members of this group.
+
+*** Connecting via powderkeg
+From the client machine - with permissions and accesss on the same vpc / LAN -
+we can start up a powderkeg repl (like kegger) in a couple of ways:
+
+**** Via cider (running on a JDK!)
+- Load up a project with powderkeg as a dependency
+  - ensure that the spark dependencies in the project MATCH the spark implementation you're running!
+    - 2.3.1 is the most current, while powderkeg defaults to 2.1.0.
+    - This will create wierd null-pointer errors when you try to connect!
+- Require powderkeg
+  - You'll see a lot of machinery kick off here, from the supporting library
+    ouroboros.
+  - powderkeg will scan the classes it needs to instrument for remote sync, and 
+    will identify jars for caching later.
+- Use powderkeg/connect! along with the spark://....:7077 
+  master name provided by flintrock (or the webUI).
+  - You can navigate to the machine's webui to see the master's view of the cluster:
+    - goto hostname:8080, which will display the spark ui, along with the connection
+      string.
+  - Upon connecting, you'll see a lot of machinery kick off: 
+    - powderkeg prepping jars to send over for shared dependencies.
+    - powderkeg requesting and setting up executors to run.
+    - spark-specific setup.
+
+- After connected, the repl should return.  At this point, you should be able to 
+  follow the examples from powderkeg, including defining RDDs and transducers to
+  operate on them.
+  - use into or transduce to get results of the computation over the RDD.
+  - dataframes are currently not in powderkeg, but RDD + xducers seems plenty powerful.
+
+- Note: this currently doesn't work on windows, at least with default network settings.
+  We'll discuss this below.
+
+**** What happened - Client setup
+- So when we launched a clojure repl via cider / powderkeg, a couple of things
+  happened:
+  - We started a client / driver to connect to the spark cluster's master via the sparkcontext.
+    - The implication here is that the client is running external to the cluster.
+    - The client / driver sends dependencies (jars) to the cluster, and acquires
+      executors (computational resources) on the cluster to run programs.
+    - The client / driver has its own ui that's exposed on port 4040, which provides
+      a lot of detail about the currently running application, job status, batches,
+      options, and lots of useful debugging information.
+  - Our client program is basically running the powerkeg repl (it's one way to establish
+    one) on the cluster as an application.
+    - If we connect to the master's ui, we'll see an application called "repl".
+    - we can inspect this appliction to see which workers are engaged, and to 
+      monitor useful debugging information:
+      - like std err/out, signals (killed /exited ,etc.).
+
+- As long as we're connected (we haven't invoked keg/disconnect!), the application
+  (cluster repl) remains running.
+- We communicate with the cluster by definning RDD's and operations on them.
+  - Rather than submitting an AOT-compiled jar file with a single main + args 
+    computational task....
+  - We define computations via transducers and the API provided by powderkeg
+    and the xforms library.
+  - We also define RDD's.
+  - Computations happen - on the cluster - by transducing the RDDs via 
+    our operations.
+    - Using into or transduce.
+    - Results are computed from distributed tasks, combined, and submitted
+      back to the machine with the spark context (our repl driver).
+
+* Elastic Map Reduce / Yarn (linux/OSX only, windows maybe?)
+- We can leverage the larger infrastucture from EMR
+  to setup a spark cluster running on YARN.
+  - Benefits are automated resource management, integration with AWS, and some
+    other nicetities.
+  - Drawbacks are it takes a while to spin up the cluster, flintrock happens in
+    a couple of minutes (from scratch, maybe faster with a pre-backed AMI.
+- Setup a cluster by following the graphical prompt from the AWS EMR section.
+  - Plenty of tutorials online...
+  - Like normal, be prepared to have a public/private key for the cluster.
+  - You'll want to be able to ssh into it, likely.
+
+- We can currently submit jobs by running on the master node of the cluster,
+  as the hadoop user!
+  - scp the jar you're interested in (should have powderkeg as a dependency)
+  - from the hadoop account, use something like:
+    - spark-submit --master yarn --class powderkeg.repl kegger.jar
+    - this infers that the YARN_CONF_DIR is setup, or SPARK_CONF_DIR.
+      - on the cluster machine, it will be automatically.
+      - from a non-cluster machine, like an ec2 instance, in theory we can
+        copy the //etc//hadoop//conf directory to our client machine...
+        - unclear, but supposedly works!
+        - currently only partly works, getting wierd errors about missing 
+          jersey jars...
+    - you should get a repl as expected, in which you can run samples.
+      - currently getting ClosureCleaner warnings, but the samples run.
+
+
+
+
+
+
+
+
+    
