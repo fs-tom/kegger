@@ -7,6 +7,7 @@
                  [marathon "4.1.6-SNAPSHOT"]
                  ;;powderkeg dependencies
                  [hcadatalab/powderkeg "0.5.1"]
+;;                 [hcadatalab/powderkeg "0.5.2-SNAPSHOT"] ;;supports 2.3.1
                  [com.esotericsoftware/kryo-shaded "4.0.0"]  ;; For Spark 2.x support
-                 [org.apache.spark/spark-core_2.11 "2.1.0"]
-                 [org.apache.spark/spark-streaming_2.11 "2.1.0"]])
+                 [org.apache.spark/spark-core_2.11 "2.3.1"]
+                 [org.apache.spark/spark-streaming_2.11 "2.3.1"]])
